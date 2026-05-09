@@ -1,4 +1,4 @@
-# Alzheimer's Disease Detection using 3D Deep Learning 🧠
+# Alzheimer’s Disease Detection using NLP and Deep Learning Architectures.
 
 Ce dépôt contient le pipeline complet de préparation des données (Data
 Preprocessing) pour un projet de détection de la maladie d'Alzheimer
