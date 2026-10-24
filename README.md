@@ -1,93 +1,122 @@
-# Alzheimer’s Disease Detection using NLP and Deep Learning Architectures.
+# Alzheimer's Disease Detection — MRI and Speech
 
-Ce dépôt contient le pipeline complet de préparation des données (Data
-Preprocessing) pour un projet de détection de la maladie d'Alzheimer
-basé sur des volumes IRM 3D issus de la base de données ADNI.
+Bimodal detection of Alzheimer's disease: a 3D convolutional network on
+brain MRI volumes, and a transformer on spontaneous speech transcripts.
 
-L'objectif de ce pipeline est de transformer des archives brutes
-massives en un dataset propre, labellisé et "skull-stripped" (sans boîte
-crânienne), prêt à être ingéré par une architecture **CNN 3D (Inflated
-ResNet-18)**.
+End-of-year engineering project (PFA), AI engineering degree.
 
-## 🚀 Fonctionnalités du Pipeline
+---
 
-1.  **Extraction massive et multithreadée** des données IRM.
-2.  **Génération automatique d'un dataset structuré (CSV)** pour lier
-    les images aux diagnostics cliniques (AD vs CN).
-3.  **Extraction cérébrale (Skull-Stripping)** accélérée par GPU via
-    HD-BET pour isoler les tissus pertinents.
+## Two modalities, two datasets
 
-## 📋 Prérequis
+| Branch | Data | Signal |
+|--------|------|--------|
+| Imaging | ADNI — 3D T1 MRI volumes | structural atrophy |
+| Language | DementiaBank Pitt Corpus — Cookie Theft transcripts | lexical and disfluency markers |
 
-Pour exécuter ce pipeline, vous aurez besoin de : \* Python 3.8+ \* Une
-carte graphique NVIDIA compatible CUDA (ex: RTX 4070) avec au moins 8 Go
-de VRAM. \* Les bibliothèques listées ci-dessous :
+Each branch is independent. They classify the same condition from
+unrelated evidence.
 
-``` bash
-pip install pandas nibabel scipy tqdm scikit-learn matplotlib
+---
+
+## Imaging branch
+
+### Preprocessing
+
+Raw ADNI archives are turned into a clean, labelled, skull-stripped
+dataset in three steps, to be run in order.
+
+**1. `extract_zips_fast.py`** — Parallel extraction of the ADNI archives
+with a thread pool, throttled to avoid saturating disk I/O.
+
+**2. `create_csv_v2.py`** — Walks the extracted `.nii` files, recovers
+each image identifier by regex, and joins it with ADNI clinical records
+to produce `dataset_preprocessed.csv` (filename, subject ID, AD/CN
+label, age, sex).
+
+**3. `brain_extractor.py`** — GPU skull-stripping with HD-BET, removing
+skull, neck and non-brain tissue. Resumable: already-processed files are
+detected and skipped, so an interrupted run continues where it stopped.
+
+### Model
+
+**`model.py`** — ResNet3D-18 using the *Inflate-1* strategy: a 2D
+ResNet-18 pretrained on ImageNet, with its kernels inflated to 3D so the
+pretrained features transfer to volumetric data. Training includes tight
+cropping to the brain, focal loss for class imbalance, volumetric
+augmentation, and test-time augmentation.
+
+**`st_2_multimodal.py`** — Late-fusion variant combining the 3D backbone
+with an MLP over clinical features (age, sex), and an automatic
+comparison against the MRI-only model. Age and sex are normalised on the
+training split only.
+
+**`gradcam_3axes.py`** — 3D Grad-CAM rendered across axial, sagittal and
+coronal planes, several slices each, to show which regions drive a
+prediction.
+
+### Avoiding data leakage
+
+Patients contribute several scans across visits. Splitting on images
+would place the same patient on both sides and inflate accuracy. The
+split is grouped by subject identifier, so no patient appears in both
+training and test sets. The same rule applies to the speech branch,
+split by subject and stratified by label.
+
+---
+
+## Language branch — `partie nlp/`
+
+**`parse_pitt_cookie.py`** builds the dataset from the Pitt Corpus:
+
+- Keeps only Cookie Theft recordings, and only the participant's turns
+  (the investigator's are discarded).
+- Strips CHAT annotation markup to recover plain transcripts.
+- Counts disfluencies *before* cleaning — filled pauses, phonological
+  fragments, retracings, unintelligible segments, paralinguistic events
+  — since those counts are clinical features in their own right.
+- Joins with Pitt metadata: MMSE, CDR, diagnosis, age, sex, education.
+
+Output: `dataset_pitt_cookie.csv`, 552 transcripts with 21 columns.
+
+`Pitt_NLP_Conversation_Journal.md` is the working log for this branch —
+dataset discovery, labelling conventions, split strategy, and the
+RoBERTa-versus-BERT decision.
+
+---
+
+## Stack
+
+| Layer | Technology |
+|-------|------------|
+| Deep learning | PyTorch, torchvision |
+| Medical imaging | nibabel, HD-BET, scipy.ndimage |
+| NLP | transformers, pandas |
+| Evaluation | scikit-learn — F1, ROC-AUC, confusion matrices |
+| Explainability | Grad-CAM 3D |
+
+Trained on a single RTX 4070 Mobile (8 GB VRAM), which constrained batch
+size and input resolution throughout.
+
+## Requirements
+
+```bash
+pip install torch torchvision pandas nibabel scipy tqdm scikit-learn matplotlib
 ```
 
-HD-BET (High-Definition Brain Extraction Tool) doit être installé et
-configuré pour l'extraction crânienne.
+HD-BET must be installed separately for skull-stripping, and requires a
+CUDA-capable GPU.
 
-## ⚙️ Ordre d'Exécution et Utilisation
+## Running the imaging pipeline
 
-Le traitement des données doit impérativement suivre cet ordre
-chronologique :
-
-### Étape 1 : Extraction des données brutes
-
-**Fichier :** `extract_zips_fast.py`
-
-Ce script se charge de décompresser les lourdes archives .zip
-téléchargées depuis l'ADNI. Il utilise le multithreading
-(ThreadPoolExecutor) pour extraire les fichiers en parallèle tout en
-évitant la saturation du disque (I/O bottleneck).
-
-``` bash
-python extract_zips_fast.py
+```bash
+python extract_zips_fast.py     # 1. extract ADNI archives
+python create_csv_v2.py         # 2. build the labelled dataset
+python brain_extractor.py       # 3. skull-strip
+python model.py                 # 4. train
+python gradcam_3axes.py         # 5. visualise attributions
 ```
 
-### Étape 2 : Création du Dataset (Mapping)
+---
 
-**Fichier :** `create_csv_v2.py`
-
-Une fois les images décompressées, ce script parcourt les fichiers .nii
-extraits et utilise des expressions régulières pour isoler l'identifiant
-de chaque image. Il croise ensuite ces identifiants avec le fichier
-clinique de l'ADNI pour générer un fichier final
-dataset_preprocessed.csv.
-
-``` bash
-python create_csv_v2.py
-```
-
-Génère un CSV contenant : Nom du fichier, ID Sujet, Label (AD/CN), Âge,
-etc.
-
-### Étape 3 : Skull-Stripping (Extraction du Cerveau)
-
-**Fichier :** `brain_extractor.py`
-
-La dernière étape de préparation. Ce script utilise l'outil HD-BET
-accéléré par GPU (cuda:0) pour nettoyer les IRM (suppression du crâne,
-du cou et des tissus non cérébraux). Le script est conçu de manière
-"résiliente" : il détecte les fichiers déjà traités et ne reprend que
-ceux qui manquent en cas d'interruption.
-
-``` bash
-python brain_extractor.py
-```
-
-## 🏗️ Prochaines Étapes (Entraînement)
-
-Une fois ce pipeline exécuté, les images générées dans le dossier de
-sortie (ADNI_SKULL_STRIPPED) sont prêtes à être ingérées par le modèle
-de Deep Learning volumétrique (ResNet 3D avec stratégie Inflate-1).
-
-Le modèle utilise un échantillonneur intelligent (Grouped Train-Test
-Split) basé sur l'identifiant du patient pour garantir l'absence totale
-de fuite de données (Data Leakage).
-
-Projet réalisé dans le cadre d'un Projet de Fin d'Année (PFA)
-d'ingénierie en Intelligence Artificielle.
+**Ilias EL AMRANI** · [LinkedIn](https://linkedin.com/in/iliaselamrani)
