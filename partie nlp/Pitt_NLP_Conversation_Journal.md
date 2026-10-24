@@ -4,7 +4,7 @@
 
 | Élément | Détail |
 |---------|--------|
-| **Étudiant** | Younes |
+| **Étudiant** | Ilias EL AMRANI |
 | **Projet** | Mémoire de fin d'études (PFA) - Partie NLP |
 | **Sujet** | Détection automatique de la maladie d'Alzheimer à partir de transcriptions orales |
 | **Dataset** | Pitt Corpus - DementiaBank |
